@@ -1,0 +1,4 @@
+requests
+pydantic>=2
+python-dotenv
+anthropic

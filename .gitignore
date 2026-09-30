@@ -1,0 +1,6 @@
+.env
+*.log
+05-actions-log/*
+!05-actions-log/.gitkeep
+__pycache__/
+.venv/
