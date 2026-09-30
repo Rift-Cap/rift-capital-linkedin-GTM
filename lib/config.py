@@ -18,30 +18,11 @@ def env(name: str, default: str | None = None, required: bool = False) -> str:
     return val or ""
 
 
-def env_bool(name: str, default: bool) -> bool:
-    return env(name, str(default)).strip().lower() in ("1", "true", "yes", "y")
-
-
-# ---- Discovery -------------------------------------------------------------
-KEYWORDS = [k.strip() for k in env("KEYWORDS", "secondary market").split(",") if k.strip()]
-DATE_POSTED = env("DATE_POSTED", "past_week")  # past_day | past_week | past_month
-SEARCH_MAX_RESULTS = int(env("SEARCH_MAX_RESULTS", "30"))
-
-# ---- Engagement ------------------------------------------------------------
-PER_CATEGORY_LIMIT = int(env("PER_CATEGORY_LIMIT", "40"))
-RESCRAPE_WINDOW_DAYS = int(env("RESCRAPE_WINDOW_DAYS", "7"))
-MIN_RESCRAPE_INTERVAL_HOURS = int(env("MIN_RESCRAPE_INTERVAL_HOURS", "24"))
-MAX_POSTS_PER_RUN = int(env("MAX_POSTS_PER_RUN", "15"))
-DELAY_MIN_S = float(env("DELAY_MIN_S", "5"))
-DELAY_MAX_S = float(env("DELAY_MAX_S", "15"))
-INCLUDE_REPLIES = env_bool("INCLUDE_REPLIES", True)
-
-# ---- Qualification / outreach ---------------------------------------------
-QUALIFY_MIN_SCORE = int(env("QUALIFY_MIN_SCORE", "70"))
-# If true, qualified engagers wait for you to set Status=Approved in Notion
-# before anything is pushed to lemlist.
-REQUIRE_APPROVAL = env_bool("REQUIRE_APPROVAL", True)
-CLAUDE_MODEL = env("CLAUDE_MODEL", "claude-sonnet-4-5")
+# ---- Watchlist fetch -------------------------------------------------------
+MAX_POSTS_PER_ACCOUNT = int(env("MAX_POSTS_PER_ACCOUNT", "50"))
+REFRESH_WINDOW_DAYS = int(env("REFRESH_WINDOW_DAYS", "7"))
+DELAY_MIN_S = float(env("DELAY_MIN_S", "3"))
+DELAY_MAX_S = float(env("DELAY_MAX_S", "8"))
 
 # ---- Orchestrator ----------------------------------------------------------
 SUBPROCESS_TIMEOUT_S = 900

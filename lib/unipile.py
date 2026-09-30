@@ -1,13 +1,12 @@
 """Unipile client (LinkedIn via official-style REST, no browser).
 
-Replaces the Playwright scraper. Auth = X-API-KEY header + account_id.
-NOTE: Unipile exposes no 'list reposters' endpoint, so reposters are not collected.
+Auth = X-API-KEY header + account_id query parameter.
 """
 from typing import Iterator
+from urllib.parse import quote
 
 from .config import env
-from .models import Engager, Post
-from .util import canonical_url, http, now_iso
+from .util import canonical_url, http
 
 
 class UnipileError(RuntimeError):
@@ -20,66 +19,32 @@ class AuthError(UnipileError):
     pass
 
 
-# ---------------------------------------------------------------- parsing ----
-def _profile_url(a: dict) -> str:
-    for k in ("public_profile_url", "profile_url", "url"):
-        if a.get(k):
-            return a[k]
-    if a.get("public_identifier"):
-        return f"https://www.linkedin.com/in/{a['public_identifier']}"
-    if a.get("id"):
-        kind = "company" if a.get("is_company") else "in"
-        return f"https://www.linkedin.com/{kind}/{a['id']}"
-    return ""
+def _count(item: dict, key: str):
+    v = item.get(key)
+    return v if isinstance(v, int) else None
 
 
-def parse_post(item: dict, keyword: str) -> Post | None:
+def parse_post(item: dict) -> dict | None:
+    """Unipile post item -> flat dict. The permalink is preserved exactly (only the
+    query string / trailing slash are stripped); share / activity / ugcPost URLs are
+    never converted into one another."""
     social_id = item.get("social_id") or item.get("id") or ""
-    # Preserve the URL exactly as LinkedIn/Unipile gives it.
     url = item.get("share_url") or (f"https://www.linkedin.com/feed/update/{social_id}" if social_id else "")
     if not url:
         return None
-    author = item.get("author") or {}
-    text = item.get("text") or ""
-    return Post(
-        post_url=canonical_url(url),
-        social_id=social_id,
-        post_date=item.get("parsed_datetime") or item.get("date") or "",
-        post_author_name=author.get("name") or "",
-        post_author_profile_url=_profile_url(author),
-        matched_keyword=keyword,
-        post_text_excerpt=" ".join(text.split())[:600],
-        search_query=keyword,
-        collected_at=now_iso(),
-    )
+    return {
+        "url": canonical_url(url),
+        "social_id": social_id,
+        "text": item.get("text") or "",
+        "date_raw": item.get("date") or "",
+        "posted_at": item.get("parsed_datetime") or "",
+        "reactions": _count(item, "reaction_counter"),
+        "comments": _count(item, "comment_counter"),
+        "reposts": _count(item, "repost_counter"),
+        "is_repost": bool(item.get("is_repost")),
+    }
 
 
-def parse_reaction(item: dict, post: dict) -> Engager | None:
-    a = item.get("author") or {}
-    name = a.get("name") or ""
-    if not name:
-        return None
-    return Engager(
-        post_url=post["post_url"], post_author_name=post.get("author", ""),
-        name=name, headline=a.get("headline") or "", linkedin_url=_profile_url(a),
-        source="reaction", reaction_type=item.get("value") or "", collected_at=now_iso(),
-    )
-
-
-def parse_comment(item: dict, post: dict) -> Engager | None:
-    a = item.get("author_details") or (item.get("author") if isinstance(item.get("author"), dict) else {}) or {}
-    name = a.get("name") or (item.get("author") if isinstance(item.get("author"), str) else "") or ""
-    if not name:
-        return None
-    return Engager(
-        post_url=post["post_url"], post_author_name=post.get("author", ""),
-        name=name, headline=a.get("headline") or "", linkedin_url=_profile_url(a),
-        source="comment", comment_text=" ".join((item.get("text") or "").split()),
-        collected_at=now_iso(),
-    )
-
-
-# ----------------------------------------------------------------- client ----
 class Unipile:
     def __init__(self, dsn: str | None = None, api_key: str | None = None, account_id: str | None = None):
         dsn = dsn or env("UNIPILE_DSN", required=True)  # e.g. api8.unipile.com:13851
@@ -96,13 +61,13 @@ class Unipile:
             raise UnipileError(r.status_code, r.text)
         return r.json()
 
-    def _paginate(self, method: str, path: str, *, params=None, json=None, limit: int) -> Iterator[dict]:
+    def _paginate(self, path: str, *, params: dict | None = None, limit: int) -> Iterator[dict]:
         got, cursor = 0, None
         while got < limit:
             p = {**(params or {}), "limit": min(100, limit - got)}
             if cursor:
                 p["cursor"] = cursor
-            data = self._req(method, path, p, json)
+            data = self._req("GET", path, p)
             items = data.get("items") or []
             for it in items:
                 yield it
@@ -113,34 +78,30 @@ class Unipile:
             if not cursor or not items:
                 return
 
-    # -- auth gate: abort the run instead of recording false zeros ------------
+    # -- auth gate: abort the run instead of recording false results ----------
     def check_auth(self) -> None:
         data = self._req("GET", f"/accounts/{self.account_id}")
         sources = data.get("sources") or []
         if sources and not any((s.get("status") or "").upper() == "OK" for s in sources):
             raise AuthError(401, f"LinkedIn account not healthy: {[s.get('status') for s in sources]}")
 
-    def search_posts(self, keyword: str, date_posted: str, max_results: int) -> list[Post]:
-        body = {"api": "classic", "category": "posts", "keywords": keyword,
-                "sort_by": "date", "date_posted": date_posted}
-        items = self._paginate("POST", "/linkedin/search", json=body, limit=max_results)
-        posts = [p for it in items if (p := parse_post(it, keyword))]
-        return posts
+    def resolve_person(self, slug: str) -> dict:
+        """GET /users/{slug} -> {'provider_id', 'name'}."""
+        d = self._req("GET", f"/users/{quote(slug, safe='')}")
+        pid = d.get("provider_id") or ""
+        if not pid:
+            raise UnipileError(404, f"no provider_id returned for person '{slug}'")
+        name = " ".join(x for x in (d.get("first_name"), d.get("last_name")) if x)
+        return {"provider_id": pid, "name": name}
 
-    def list_reactions(self, social_id: str, post: dict, limit: int) -> list[Engager]:
-        out = self._paginate("GET", f"/posts/{social_id}/reactions", limit=limit)
-        return [e for it in out if (e := parse_reaction(it, post))]
+    def resolve_company(self, slug: str) -> dict:
+        """GET /linkedin/company/{slug} -> {'provider_id', 'name'}."""
+        d = self._req("GET", f"/linkedin/company/{quote(slug, safe='')}")
+        pid = d.get("id") or ""
+        if not pid:
+            raise UnipileError(404, f"no id returned for company '{slug}'")
+        return {"provider_id": str(pid), "name": d.get("name") or ""}
 
-    def list_comments(self, social_id: str, post: dict, limit: int, include_replies: bool) -> list[Engager]:
-        result: list[Engager] = []
-        for it in self._paginate("GET", f"/posts/{social_id}/comments", limit=limit):
-            if e := parse_comment(it, post):
-                result.append(e)
-            if include_replies and (it.get("reply_counter") or 0) > 0 and len(result) < limit:
-                for rp in self._paginate("GET", f"/posts/{social_id}/comments",
-                                         params={"comment_id": it.get("id")}, limit=limit - len(result)):
-                    if e := parse_comment(rp, post):
-                        result.append(e)
-            if len(result) >= limit:
-                break
-        return result[:limit]
+    def list_posts(self, provider_id: str, is_company: bool, limit: int) -> list[dict]:
+        params = {"is_company": "true"} if is_company else None
+        return list(self._paginate(f"/users/{quote(provider_id, safe='')}/posts", params=params, limit=limit))

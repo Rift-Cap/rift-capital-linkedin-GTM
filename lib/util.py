@@ -1,9 +1,8 @@
-import json
 import logging
 import sys
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import requests
 
@@ -49,21 +48,25 @@ def canonical_url(url: str | None) -> str:
     return urlunsplit((p.scheme or "https", p.netloc.lower(), p.path.rstrip("/"), "", ""))
 
 
-def split_name(full: str) -> tuple[str, str]:
-    parts = (full or "").split()
-    return (parts[0], " ".join(parts[1:])) if parts else ("", "")
-
-
-def extract_json(text: str):
-    """Pull the first JSON object/array out of an LLM reply."""
-    dec = json.JSONDecoder()
-    for i, ch in enumerate(text):
-        if ch in "{[":
-            try:
-                return dec.raw_decode(text[i:])[0]
-            except json.JSONDecodeError:
-                continue
-    raise ValueError("No JSON found in model output")
+def parse_account_url(url: str | None) -> tuple[str, str] | None:
+    """LinkedIn account URL -> (type, slug) with type 'person' (/in/<slug>) or
+    'company' (/company/<slug>); None if the URL is not one of those."""
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "https://" + raw
+    p = urlsplit(raw)
+    host = p.netloc.lower().split(":")[0]
+    if host != "linkedin.com" and not host.endswith(".linkedin.com"):
+        return None
+    parts = [x for x in p.path.split("/") if x]
+    if len(parts) < 2 or parts[0] not in ("in", "company"):
+        return None
+    slug = unquote(parts[1]).strip()
+    if not slug:
+        return None
+    return ("person" if parts[0] == "in" else "company"), slug
 
 
 RETRY_STATUS = {429, 500, 502, 503, 504}

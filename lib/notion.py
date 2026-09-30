@@ -1,6 +1,6 @@
 """Minimal Notion REST client (API version 2022-06-28) used as the system's database.
 
-Notion replaces: the CSV outputs, engagement_state.json and the seen-URL JSON.
+Three databases: watchlist (accounts to follow), posts, runs (run log).
 State lives in Notion so the job can run on ephemeral machines (cron, GitHub Actions).
 """
 import time
@@ -63,8 +63,8 @@ class Notion:
             "Content-Type": "application/json",
         }
         self.dbs = {
-            "posts": env("NOTION_POSTS_DB"), "engagers": env("NOTION_ENGAGERS_DB"),
-            "snapshots": env("NOTION_SNAPSHOTS_DB"), "runs": env("NOTION_RUNS_DB"),
+            "watchlist": env("NOTION_WATCHLIST_DB"), "posts": env("NOTION_POSTS_DB"),
+            "runs": env("NOTION_RUNS_DB"),
         }
 
     def _req(self, method: str, path: str, json: dict | None = None) -> dict:
