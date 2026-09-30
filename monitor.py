@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Lightweight orchestrator. Run every ~72h from cron / launchd / GitHub Actions.
+"""Lightweight orchestrator. Run daily from cron / launchd / GitHub Actions.
 
-search -> engagement -> qualify -> push. Each step is a subprocess with a 900s timeout;
-only the last lines of output are logged. NEW_POSTS is parsed BEFORE judging the exit code.
-Auth failures (exit code 2) stop the whole pipeline.
+Runs fetch_watchlist_posts.py as a subprocess with a 900s timeout; only the last lines of
+output are logged. NEW_POSTS is parsed BEFORE judging the exit code.
+Returns 1 on auth failure (exit code 2), timeout or any non-zero exit.
 """
 import re
 import subprocess
@@ -19,6 +19,7 @@ from lib.util import get_logger  # noqa: E402
 log = get_logger("monitor")
 W = ROOT / "03-workflows"
 AUTH_FAILED = 2
+TIMED_OUT = -1
 
 
 def run(script: str, *args: str) -> tuple[int, str]:
@@ -27,7 +28,7 @@ def run(script: str, *args: str) -> tuple[int, str]:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S, cwd=ROOT)
     except subprocess.TimeoutExpired:
         log.error("%s timed out after %ss", script, SUBPROCESS_TIMEOUT_S)
-        return -1, ""
+        return TIMED_OUT, ""
     out = (p.stdout or "") + (p.stderr or "")
     log.info("%s exit=%s | %s", script, p.returncode, " / ".join(out.strip().splitlines()[-3:]))
     return p.returncode, out
@@ -39,23 +40,17 @@ def parse_int(tag: str, out: str) -> int:
 
 
 def main() -> int:
-    code, out = run("search_linkedin_posts.py")
-    new_posts = parse_int("NEW_POSTS", out)  # read first; exit code is checked after
+    code, out = run("fetch_watchlist_posts.py")
+    new_posts = parse_int("NEW_POSTS", out)  # read first; exit code is judged after
+    log.info("NEW_POSTS=%s", new_posts)
     if code == AUTH_FAILED:
-        log.error("LinkedIn auth failed, stopping")
+        log.error("LinkedIn auth failed")
+        return 1
+    if code == TIMED_OUT:
         return 1
     if code != 0:
-        log.error("search step failed (exit %s); continuing with rescrape of known posts", code)
-    log.info("NEW_POSTS=%s", new_posts)
-
-    # Always run: even with 0 new posts, known posts inside the 7-day window may be due.
-    code, _ = run("get_post_engagement.py")
-    if code == AUTH_FAILED:
+        log.error("fetch_watchlist_posts.py failed (exit %s)", code)
         return 1
-    for step in ("qualify_engagers.py", "push_to_lemlist.py"):
-        code, _ = run(step)
-        if code != 0:
-            log.error("%s failed (exit %s)", step, code)
     return 0
 
 

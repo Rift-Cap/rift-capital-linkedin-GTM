@@ -1,41 +1,54 @@
-# linkedin-monitor (Unipile + Claude + Notion + lemlist)
+# linkedin-monitor (Unipile + Notion)
 
-Finds LinkedIn posts for your keywords, collects who reacted/commented, scores them against your ICP with Claude,
-and pushes approved leads into a lemlist campaign. Notion is the database, so it runs fine on cron or GitHub Actions.
+Follows a watchlist of LinkedIn accounts (people and companies) and stores all their posts in Notion.
+No scoring, no LLM, no outreach tool. Notion is the database, so it runs fine on cron or GitHub Actions.
 
 ```
-Unipile search ─► Claude relevance filter ─► Notion Posts
-Unipile reactions/comments (7-day rescrape window) ─► Notion Engagers + Snapshots
-Claude score + icebreaker ─► Status Qualified/Rejected
-You set Status=Approved in Notion ─► lemlist campaign lead (status Pushed)
+Notion Watchlist (accounts to follow)
+  ─► Unipile: resolve provider id once, list each account's posts
+  ─► Notion Posts (new posts created; counters of posts < 7 days old refreshed)
+  ─► Notion Run Log + 05-actions-log/results.md
 ```
 
 ## Setup
+
 1. `pip install -r requirements.txt`; `cp .env.example .env` and fill it in.
 2. Notion: create an integration, share a parent page with it, then `python setup_notion.py <parent_page_id>`
-   and paste the four printed ids into `.env`.
-3. Edit `icp.md` (topic, ICP, tone). This is Claude's whole context.
-4. In lemlist, create the campaign, put `{{icebreaker}}` in step 1, and copy its id to `LEMLIST_CAMPAIGN_ID`.
-5. Try it: `python 03-workflows/search_linkedin_posts.py`, then `python monitor.py`.
-6. Schedule (~72h): `0 6 */3 * * cd /path/linkedin-monitor && python3 monitor.py` (cron/launchd) or use `.github/workflows/monitor.yml`.
+   and paste the three printed lines (`NOTION_WATCHLIST_DB`, `NOTION_POSTS_DB`, `NOTION_RUNS_DB`) into `.env`.
+3. Fill the watchlist: add rows in Notion (LinkedIn URL + Status `Active`), or bulk-add from a text file:
+   `python 03-workflows/add_to_watchlist.py accounts.txt` (one URL per line, optional `, label`; `#` comments allowed;
+   duplicates and URLs that are not `/in/` or `/company/` are skipped).
+4. Try it: `python monitor.py`.
+5. Schedule daily: `0 6 * * * cd /path/linkedin-monitor && python3 monitor.py` (cron/launchd) or use
+   `.github/workflows/monitor.yml` (secrets: `UNIPILE_DSN`, `UNIPILE_API_KEY`, `UNIPILE_ACCOUNT_ID`, `NOTION_TOKEN`,
+   `NOTION_WATCHLIST_DB`, `NOTION_POSTS_DB`, `NOTION_RUNS_DB`).
+
+## Notion databases
+
+- **Watchlist**: Name (title), LinkedIn URL, Type (person/company), Status (Active/Paused), Provider ID, Last Checked, Last Error.
+  Only Name/URL/Status need filling in; Provider ID, Type and Name are resolved on the first run. Set Status=Paused to skip an account.
+- **Posts**: Title, Post URL, Social ID, Account, Account URL, Posted At, Posted (raw), Text, Reactions, Comments, Reposts,
+  Is Repost, Collected At, Counters Updated.
+- **Run Log**: Run, Script, Status, Summary, At.
 
 ## Scripts
-- `search_linkedin_posts.py` discover, filter, store. Prints `NEW_POSTS=<n>`, always exits 0 (2 = auth failure).
-- `get_post_engagement.py [--all] [--no-cap]` eligible = collected <=7d ago and not scraped in 24h, max 15/run.
-- `qualify_engagers.py` Claude scoring, threshold `QUALIFY_MIN_SCORE` (70).
-- `push_to_lemlist.py [--dry-run]` pushes `Approved` rows (or `Qualified` if `REQUIRE_APPROVAL=false`).
-- `monitor.py` runs the four in order, 900s timeout each, stops on auth failure.
 
-## Differences from the Playwright original
-- No browser, no session file. Unipile holds the LinkedIn session; reconnect the account in Unipile if auth fails.
-- **Reposters are not collected**: Unipile has no endpoint for them.
-- Permalinks come from Unipile's `share_url` as-is (query/trailing slash stripped); no clipboard trick needed.
-- CSVs and JSON state are replaced by Notion. Engagers are de-duplicated per post (reactions: profile; comments:
-  profile + first 80 chars). The time series lives in the Snapshots database (counts per scrape).
-- `monitor.py` always runs engagement (needed for rescrapes), not only when new posts were found.
-- Failed posts are flagged in `Last Error` and never recorded as zero engagement.
+- `03-workflows/fetch_watchlist_posts.py` checks Unipile auth (exit 2 and nothing written on failure), then for each
+  non-paused account lists up to `MAX_POSTS_PER_ACCOUNT` posts. Unseen posts are created; already-seen posts younger than
+  `REFRESH_WINDOW_DAYS` only get their counters refreshed; older ones are left alone. A failing account sets its `Last Error`
+  and the run continues; a 401/403 aborts the run with exit 2. Prints `NEW_POSTS=<n>` and exits 0 after any normal run.
+- `03-workflows/add_to_watchlist.py <file>` bulk-adds accounts.
+- `monitor.py` runs the fetch script with a 900 s timeout and returns 1 on auth failure, timeout or non-zero exit.
+
+Post URLs are stored exactly as Unipile returns them (`share_url`), with only the query string and trailing slash stripped.
+Share / activity / ugcPost URLs are never converted into one another.
+
+## Settings (optional env vars)
+
+`MAX_POSTS_PER_ACCOUNT` (50), `REFRESH_WINDOW_DAYS` (7), `DELAY_MIN_S` / `DELAY_MAX_S` (3 / 8 seconds between accounts).
 
 ## Notes
-- Unipile reaction/comment payloads are parsed defensively; check one real run and adjust `lib/unipile.py` parsers if a field differs.
+
+- Unipile reconnects: if auth fails, reconnect the LinkedIn account in Unipile.
 - Use only with an account you are authorised to use, within LinkedIn's terms and GDPR. Keep `.env` out of git.
 - Tests: `python -m unittest discover -s tests`
