@@ -1,7 +1,7 @@
 name: linkedin-monitor
 on:
   schedule:
-    - cron: "0 6 */3 * *"   # roughly every 72h
+    - cron: "0 6 * * *"   # daily
   workflow_dispatch: {}
 jobs:
   run:
@@ -18,10 +18,6 @@ jobs:
           UNIPILE_API_KEY: ${{ secrets.UNIPILE_API_KEY }}
           UNIPILE_ACCOUNT_ID: ${{ secrets.UNIPILE_ACCOUNT_ID }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_WATCHLIST_DB: ${{ secrets.NOTION_WATCHLIST_DB }}
           NOTION_POSTS_DB: ${{ secrets.NOTION_POSTS_DB }}
-          NOTION_ENGAGERS_DB: ${{ secrets.NOTION_ENGAGERS_DB }}
-          NOTION_SNAPSHOTS_DB: ${{ secrets.NOTION_SNAPSHOTS_DB }}
           NOTION_RUNS_DB: ${{ secrets.NOTION_RUNS_DB }}
-          LEMLIST_API_KEY: ${{ secrets.LEMLIST_API_KEY }}
-          LEMLIST_CAMPAIGN_ID: ${{ secrets.LEMLIST_CAMPAIGN_ID }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
