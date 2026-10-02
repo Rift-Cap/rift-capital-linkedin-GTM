@@ -44,6 +44,10 @@ Notion Watchlist (accounts to follow)
   `MAX_COMMENTS_PER_POST` top-level comments each (replies to comments are not collected). Same exit-code rules as above; prints `NEW_ENGAGERS=<n>`.
   If `NOTION_ENGAGERS_DB` is not set it logs a warning and skips. It stops cleanly after `ENGAGER_TIME_BUDGET_S` (780 s) and
   visits the least-covered posts first, so the first big catch-up simply continues over the next runs (status `partial` in the Run Log).
+- **Attio de-dup (optional):** if `ATTIO_API_KEY` is set, `fetch_engagers.py` loads all Attio People once per run and skips any engager
+  already there (match on LinkedIn `/in/` slug; otherwise on full name, only against Attio people that have no LinkedIn URL).
+  Skipped people are counted in the Run Log summary. If Attio is unreachable the run continues without de-dup and logs `partial`.
+  Rows already in Notion are not touched.
 - `03-workflows/add_to_watchlist.py <file>` bulk-adds accounts.
 - `monitor.py` runs the two fetch scripts one after the other, each with a 900 s timeout and returns 1 on auth failure, timeout or non-zero exit.
 
