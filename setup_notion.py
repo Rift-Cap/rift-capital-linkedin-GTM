@@ -27,7 +27,7 @@ SCHEMAS = {
     "NOTION_ENGAGERS_DB": ("LinkedIn Engagers", {
         "Name": T, "Profile URL": U, "Headline": RT, "Post URL": U, "Account": RT,
         "Source": S("Reaction", "Comment"), "Reaction Type": RT, "Comment Text": RT, "Key": RT, "Collected At": D,
-        "Lemlist": S("Pushed", "In Attio", "No URL")}),
+        "Lemlist": S("Pushed", "In Attio", "No URL", "Company")}),
     "NOTION_RUNS_DB": ("Run Log", {"Run": T, "Script": S(), "Status": S(), "Summary": RT, "At": D}),
 }
 
