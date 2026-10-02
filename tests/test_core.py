@@ -411,6 +411,32 @@ class EngagerTests(unittest.TestCase):
         self.assertEqual((code, n), (0, 1))
         self.assertEqual(nt.log_calls[0][1], "partial")
 
+    def test_time_budget_stops_cleanly_and_next_run_resumes(self):
+        nt = FakeNotion(posts=[self.post(1), self.post(2), self.post(3)])
+        reacts = {f"urn:li:activity:{i}": [self.react(f"P{i}-{j}") for j in range(3)] for i in (1, 2, 3)}
+        uni = FakeUnipile(reactions=reacts)
+        ticks = iter(range(0, 1000))  # each clock() call advances 1 "second"
+        with mock.patch.object(eng, "write_results_md"):
+            # budget 4: start(0) -> post1 check(1), 3 row checks(2,3,4 -> stops at the 3rd)
+            code, n = eng.run(uni, nt, sleep=lambda s: None, now=NOW, clock=lambda: next(ticks), budget_s=4)
+        self.assertEqual(code, 0)
+        self.assertGreater(n, 0)
+        self.assertLess(len(nt.pages["engagers"]), 9)
+        self.assertEqual(nt.log_calls[-1][1], "partial")
+        self.assertIn("time budget", nt.log_calls[-1][2])
+        # next run with plenty of time finishes everything, no duplicates
+        code, _, _ = self.run_eng(uni, nt)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(nt.pages["engagers"]), 9)
+        self.assertEqual(nt.log_calls[-1][1], "ok")
+
+    def test_least_covered_posts_go_first(self):
+        covered = {"Name": N.title("old"), "Key": N.text("k1"), "Post URL": N.url("https://www.linkedin.com/posts/p-activity-1-q")}
+        nt = FakeNotion(posts=[self.post(1), self.post(2)], engagers=[covered])
+        uni = FakeUnipile()
+        self.run_eng(uni, nt)
+        self.assertEqual([c[0] for c in uni.react_calls], ["urn:li:activity:2", "urn:li:activity:1"])
+
     def test_main_skips_when_db_not_configured(self):
         nt = FakeNotion()
         nt.dbs = {"engagers": ""}
