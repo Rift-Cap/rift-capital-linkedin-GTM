@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 import monitor
 from lib import attio as A
 from lib import notion as N
+from lib.lemlist import Lemlist, LemlistError
 from lib.unipile import AuthError, UnipileError, parse_comment, parse_post, parse_reaction
 from lib.util import canonical_url, parse_account_url
 
@@ -25,6 +26,7 @@ def load(name: str):
 fetch = load("fetch_watchlist_posts")
 add_wl = load("add_to_watchlist")
 eng = load("fetch_engagers")
+push = load("push_to_lemlist")
 NOW = datetime.now(timezone.utc)
 
 
@@ -497,6 +499,93 @@ class AttioDedupTests(unittest.TestCase):
                 A.load_index()
 
 
+class FakeLemlist:
+    def __init__(self, fail_for=()):
+        self.leads, self.campaigns, self.fail_for = [], [], set(fail_for)
+
+    def get_or_create_campaign(self, name):
+        self.campaigns.append(name)
+        return "cmp1", True
+
+    def add_lead(self, cid, lead):
+        if lead["lastName"] in self.fail_for:
+            raise LemlistError("boom")
+        self.leads.append((cid, lead))
+        return "added"
+
+
+class LemlistPushTests(unittest.TestCase):
+    @staticmethod
+    def eng_row(name, url, post="1", lemlist=None, headline="CFO"):
+        d = {"Name": N.title(name), "Profile URL": N.url(url), "Headline": N.text(headline),
+             "Post URL": N.url(f"https://x/{post}"), "Source": N.select("Reaction"), "Key": N.text(f"{name}{post}")}
+        if lemlist:
+            d["Lemlist"] = N.select(lemlist)
+        return d
+
+    def go(self, rows, lem=None, records=()):
+        nt = FakeNotion(engagers=rows)
+        lem = lem or FakeLemlist()
+        code, n = push.run(nt, lem, A.build_index(list(records)), campaign_name="C")
+        return nt, lem, code, n
+
+    def test_pushes_once_per_person_and_marks_rows(self):
+        rows = [self.eng_row("Ann Lee", "https://www.linkedin.com/in/ann", "1"),
+                self.eng_row("Ann Lee", "https://www.linkedin.com/in/ann/", "2"),
+                self.eng_row("Bob Stone", "https://www.linkedin.com/in/bob")]
+        nt, lem, code, n = self.go(rows)
+        self.assertEqual((code, n, len(lem.leads), lem.campaigns), (0, 2, 2, ["C"]))
+        self.assertEqual({N.read(r, "Lemlist") for r in nt.pages["engagers"]}, {"Pushed"})
+        lead = lem.leads[0][1]
+        self.assertEqual((lead["firstName"], lead["lastName"], lead["linkedinUrl"]), ("Ann", "Lee", "https://www.linkedin.com/in/ann"))
+
+    def test_skips_attio_already_pushed_and_no_url(self):
+        recs = [{"values": {"name": [{"full_name": "Cy Dee"}], "linkedin": [{"value": "https://www.linkedin.com/in/cy"}]}}]
+        rows = [self.eng_row("Cy Dee", "https://www.linkedin.com/in/cy"),
+                self.eng_row("Old One", "https://www.linkedin.com/in/old", lemlist="Pushed"),
+                self.eng_row("No Url", "")]
+        nt, lem, code, n = self.go(rows, records=recs)
+        self.assertEqual((code, n, lem.leads, lem.campaigns), (0, 0, [], []))   # campaign not even created
+        self.assertEqual([N.read(r, "Lemlist") for r in nt.pages["engagers"]], ["In Attio", "Pushed", "No URL"])
+
+    def test_error_leaves_row_empty_for_retry(self):
+        rows = [self.eng_row("Ann Lee", "https://www.linkedin.com/in/ann"), self.eng_row("Bob Stone", "https://www.linkedin.com/in/bob")]
+        nt, lem, code, n = self.go(rows, lem=FakeLemlist(fail_for=["Lee"]))
+        self.assertEqual((code, n), (1, 1))
+        self.assertEqual([N.read(r, "Lemlist") for r in nt.pages["engagers"]], ["", "Pushed"])
+
+    def test_time_budget_stops_cleanly(self):
+        rows = [self.eng_row("Ann Lee", "https://www.linkedin.com/in/ann")]
+        nt = FakeNotion(engagers=rows)
+        code, n = push.run(nt, FakeLemlist(), A.build_index([]), clock=lambda: 10, budget_s=-1)
+        self.assertEqual((code, n), (0, 0))
+        self.assertIn("time budget", nt.log_calls[-1][2])
+
+    def test_main_skips_without_keys_and_refuses_without_attio(self):
+        with mock.patch.dict("os.environ", {}, clear=True), mock.patch("builtins.print") as pr:
+            self.assertEqual(push.main(), 0)
+        pr.assert_called_with("PUSHED=0")
+        nt = FakeNotion()
+        with mock.patch.dict("os.environ", {"LEMLIST_API_KEY": "k"}), mock.patch.object(push, "Notion", return_value=nt), \
+             mock.patch.object(push.A, "load_index", side_effect=A.AttioError("down")), mock.patch("builtins.print"):
+            self.assertEqual(push.main(), 1)
+
+    def test_client_add_lead_outcomes(self):
+        class R:
+            def __init__(self, c, t=""): self.status_code, self.text = c, t
+        lem = Lemlist("k", sleep=lambda s: None)
+        with mock.patch("lib.lemlist.http", return_value=R(200)):
+            self.assertEqual(lem.add_lead("c", {}), "added")
+        with mock.patch("lib.lemlist.http", return_value=R(400, "Lead already in campaign")):
+            self.assertEqual(lem.add_lead("c", {}), "exists")
+        with mock.patch("lib.lemlist.http", return_value=R(500, "x")):
+            with self.assertRaises(LemlistError):
+                lem.add_lead("c", {})
+        with mock.patch("lib.lemlist.http", return_value=R(401)):
+            with self.assertRaises(LemlistError):
+                lem.add_lead("c", {})
+
+
 class MonitorTests(unittest.TestCase):
     def test_parse_int(self):
         self.assertEqual(monitor.parse_int("NEW_POSTS", "x\nNEW_POSTS=3"), 3)
@@ -505,7 +594,7 @@ class MonitorTests(unittest.TestCase):
     def test_ok_runs_both_scripts(self):
         with mock.patch.object(monitor, "run", return_value=(0, "NEW_POSTS=4")) as m:
             self.assertEqual(monitor.main(), 0)
-        self.assertEqual([c.args[0] for c in m.call_args_list], ["fetch_watchlist_posts.py", "fetch_engagers.py"])
+        self.assertEqual([c.args[0] for c in m.call_args_list], ["fetch_watchlist_posts.py", "fetch_engagers.py", "push_to_lemlist.py"])
 
     def test_auth_failure_stops_pipeline(self):
         with mock.patch.object(monitor, "run", return_value=(2, "NEW_POSTS=0")) as m:
@@ -516,10 +605,10 @@ class MonitorTests(unittest.TestCase):
         for code in (-1, 1):
             with mock.patch.object(monitor, "run", return_value=(code, "NEW_POSTS=3")) as m:
                 self.assertEqual(monitor.main(), 1, code)
-            self.assertEqual(m.call_count, 2)
+            self.assertEqual(m.call_count, 3)
 
     def test_engager_failure_reported(self):
-        seq = iter([(0, "NEW_POSTS=1"), (1, "boom")])
+        seq = iter([(0, "NEW_POSTS=1"), (1, "boom"), (0, "PUSHED=0")])
         with mock.patch.object(monitor, "run", side_effect=lambda *a: next(seq)):
             self.assertEqual(monitor.main(), 1)
 
