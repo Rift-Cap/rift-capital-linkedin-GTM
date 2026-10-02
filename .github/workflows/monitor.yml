@@ -22,3 +22,4 @@ jobs:
           NOTION_POSTS_DB: ${{ secrets.NOTION_POSTS_DB }}
           NOTION_ENGAGERS_DB: ${{ secrets.NOTION_ENGAGERS_DB }}
           NOTION_RUNS_DB: ${{ secrets.NOTION_RUNS_DB }}
+          ATTIO_API_KEY: ${{ secrets.ATTIO_API_KEY }}
