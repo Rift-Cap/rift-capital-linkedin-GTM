@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 import monitor
 from lib import notion as N
-from lib.unipile import AuthError, UnipileError, parse_post
+from lib.unipile import AuthError, UnipileError, parse_comment, parse_post, parse_reaction
 from lib.util import canonical_url, parse_account_url
 
 
@@ -23,6 +23,7 @@ def load(name: str):
 
 fetch = load("fetch_watchlist_posts")
 add_wl = load("add_to_watchlist")
+eng = load("fetch_engagers")
 NOW = datetime.now(timezone.utc)
 
 
@@ -33,13 +34,16 @@ def iso(**kw) -> str:
 class FakeNotion:
     """In-memory Notion: stores pages in the API's read format so N.read works."""
 
-    def __init__(self, watchlist=(), posts=()):
-        self.pages = {"watchlist": [], "posts": [], "runs": []}
+    def __init__(self, watchlist=(), posts=(), engagers=()):
+        self.pages = {"watchlist": [], "posts": [], "engagers": [], "runs": []}
         self.n = 0
         for props in watchlist:
             self.create("watchlist", props)
         for props in posts:
             self.create("posts", props)
+        for props in engagers:
+            self.create("engagers", props)
+        self.dbs = {"engagers": "x"}
         self.writes = 0  # counts writes after seeding
         self.log_calls = []
 
@@ -96,7 +100,9 @@ def item(i, **kw):
 
 
 class FakeUnipile:
-    def __init__(self, posts=None, auth_error=None, fail=None):
+    def __init__(self, posts=None, auth_error=None, fail=None, reactions=None, comments=None, fail_posts=None):
+        self.reactions, self.comments, self.fail_posts = reactions or {}, comments or {}, fail_posts or {}
+        self.react_calls, self.comment_calls = [], []
         self.posts = posts or {}          # provider_id -> items
         self.auth_error = auth_error
         self.fail = fail or {}            # provider_id -> exception
@@ -114,6 +120,16 @@ class FakeUnipile:
     def resolve_company(self, slug):
         self.resolved.append(("company", slug))
         return {"provider_id": f"co-{slug}", "name": slug.title()}
+
+    def list_reactions(self, social_id, limit):
+        self.react_calls.append((social_id, limit))
+        if social_id in self.fail_posts:
+            raise self.fail_posts[social_id]
+        return [parse_reaction(i) for i in self.reactions.get(social_id, [])]
+
+    def list_comments(self, social_id, limit):
+        self.comment_calls.append((social_id, limit))
+        return [parse_comment(i) for i in self.comments.get(social_id, [])]
 
     def list_posts(self, provider_id, is_company, limit):
         self.listed.append((provider_id, is_company, limit))
@@ -299,20 +315,137 @@ class AddToWatchlistTests(unittest.TestCase):
         self.assertEqual(N.read(rows[2], "Type"), "company")
 
 
+class EngagerTests(unittest.TestCase):
+    @staticmethod
+    def post(i, days=1, social=True, url=None):
+        d = {"Post URL": N.url(url or f"https://www.linkedin.com/posts/p-activity-{i}-q"),
+             "Social ID": N.text(f"urn:li:activity:{i}" if social else ""), "Account": N.text("Acme"),
+             "Posted At": N.date(iso(days=days)), "Collected At": N.date(iso(days=days))}
+        return d
+
+    @staticmethod
+    def react(name, value="LIKE", pid=None):
+        return {"value": value, "author": {"name": name, "headline": "Partner", "public_identifier": pid or name.lower()}}
+
+    @staticmethod
+    def comment(name, text, aid="ACo1"):
+        return {"text": text, "author": name, "author_details": {"id": aid, "headline": "CFO", "public_identifier": aid}}
+
+    def run_eng(self, uni, nt):
+        with mock.patch.object(eng, "write_results_md") as md:
+            code, n = eng.run(uni, nt, sleep=lambda s: None, now=NOW)
+        return code, n, md
+
+    def test_parsers(self):
+        r = parse_reaction(self.react("Cy", "INSIGHTFUL"))
+        self.assertEqual((r["name"], r["reaction_type"], r["source"], r["profile_url"]),
+                         ("Cy", "INSIGHTFUL", "Reaction", "https://www.linkedin.com/in/cy"))
+        c = parse_comment(self.comment("Di", "Great   point"))
+        self.assertEqual((c["comment_text"], c["source"], c["headline"]), ("Great point", "Comment", "CFO"))
+        self.assertIsNone(parse_comment({"text": "x"}))
+        self.assertIsNone(parse_reaction({"value": "LIKE"}))
+
+    def test_collects_reactions_and_comments_with_caps(self):
+        nt = FakeNotion(posts=[self.post(1)])
+        uni = FakeUnipile(reactions={"urn:li:activity:1": [self.react("Ann"), self.react("Bob", "PRAISE")]},
+                          comments={"urn:li:activity:1": [self.comment("Cy", "Nice", "ACo9")]})
+        code, n, _ = self.run_eng(uni, nt)
+        self.assertEqual((code, n), (0, 3))
+        rows = nt.pages["engagers"]
+        self.assertEqual({N.read(r, "Source") for r in rows}, {"Reaction", "Comment"})
+        bob = next(r for r in rows if N.read(r, "Name") == "Bob")
+        self.assertEqual((N.read(bob, "Reaction Type"), N.read(bob, "Post URL"), N.read(bob, "Account")),
+                         ("PRAISE", "https://www.linkedin.com/posts/p-activity-1-q", "Acme"))
+        cy = next(r for r in rows if N.read(r, "Name") == "Cy")
+        self.assertEqual((N.read(cy, "Comment Text"), N.read(cy, "Headline")), ("Nice", "CFO"))
+        self.assertEqual(uni.react_calls, [("urn:li:activity:1", eng.MAX_REACTIONS_PER_POST)])
+        self.assertEqual(uni.comment_calls, [("urn:li:activity:1", eng.MAX_COMMENTS_PER_POST)])
+
+    def test_second_run_does_not_duplicate(self):
+        nt = FakeNotion(posts=[self.post(1)])
+        uni = FakeUnipile(reactions={"urn:li:activity:1": [self.react("Ann")]},
+                          comments={"urn:li:activity:1": [self.comment("Cy", "Nice")]})
+        self.run_eng(uni, nt)
+        code, n, _ = self.run_eng(uni, nt)
+        self.assertEqual((code, n), (0, 0))
+        self.assertEqual(len(nt.pages["engagers"]), 2)
+
+    def test_new_comment_by_same_person_is_kept_same_comment_is_not(self):
+        nt = FakeNotion(posts=[self.post(1)])
+        uni = FakeUnipile(comments={"urn:li:activity:1": [self.comment("Cy", "Nice"), self.comment("Cy", "Nice"),
+                                                           self.comment("Cy", "A second, different comment")]})
+        _, n, _ = self.run_eng(uni, nt)
+        self.assertEqual(n, 2)
+
+    def test_only_recent_posts_with_social_id(self):
+        nt = FakeNotion(posts=[self.post(1, days=2), self.post(2, days=20), self.post(3, social=False)])
+        uni = FakeUnipile()
+        self.run_eng(uni, nt)
+        self.assertEqual([c[0] for c in uni.react_calls], ["urn:li:activity:1"])
+
+    def test_auth_failure_exit_2_writes_nothing(self):
+        nt = FakeNotion(posts=[self.post(1)])
+        uni = FakeUnipile(auth_error=AuthError(401, "bad"))
+        with mock.patch.object(eng, "Unipile", return_value=uni), mock.patch.object(eng, "Notion", return_value=nt), \
+             mock.patch.object(eng, "write_results_md") as md, mock.patch("builtins.print") as pr:
+            self.assertEqual(eng.main(), 2)
+        pr.assert_called_with("NEW_ENGAGERS=0")
+        self.assertEqual((nt.writes, nt.pages["engagers"]), (0, []))
+        md.assert_not_called()
+
+    def test_bad_post_does_not_stop_run_and_mid_run_auth_aborts(self):
+        nt = FakeNotion(posts=[self.post(1), self.post(2), self.post(3), self.post(4)])
+        uni = FakeUnipile(reactions={"urn:li:activity:2": [self.react("Ann")], "urn:li:activity:3": [self.react("Bob")]},
+                          fail_posts={"urn:li:activity:1": UnipileError(500, "kaput"),
+                                      "urn:li:activity:3": AuthError(403, "no")})
+        code, n, _ = self.run_eng(uni, nt)
+        self.assertEqual((code, n), (2, 1))  # post 1 failed (continued), post 2 ok, post 3 auth -> abort, 4 untouched
+        self.assertNotIn("urn:li:activity:4", [c[0] for c in uni.react_calls])
+        self.assertEqual(nt.log_calls[0][1], "auth_failed")
+
+    def test_partial_status_and_exit_zero(self):
+        nt = FakeNotion(posts=[self.post(1), self.post(2)])
+        uni = FakeUnipile(reactions={"urn:li:activity:2": [self.react("Ann")]},
+                          fail_posts={"urn:li:activity:1": UnipileError(500, "kaput")})
+        code, n, _ = self.run_eng(uni, nt)
+        self.assertEqual((code, n), (0, 1))
+        self.assertEqual(nt.log_calls[0][1], "partial")
+
+    def test_main_skips_when_db_not_configured(self):
+        nt = FakeNotion()
+        nt.dbs = {"engagers": ""}
+        with mock.patch.object(eng, "Notion", return_value=nt), mock.patch.object(eng, "Unipile") as u, \
+             mock.patch("builtins.print") as pr:
+            self.assertEqual(eng.main(), 0)
+        pr.assert_called_with("NEW_ENGAGERS=0")
+        u.assert_not_called()
+
+
 class MonitorTests(unittest.TestCase):
     def test_parse_int(self):
         self.assertEqual(monitor.parse_int("NEW_POSTS", "x\nNEW_POSTS=3"), 3)
         self.assertEqual(monitor.parse_int("NEW_POSTS", "nothing"), 0)
 
-    def test_ok(self):
+    def test_ok_runs_both_scripts(self):
         with mock.patch.object(monitor, "run", return_value=(0, "NEW_POSTS=4")) as m:
             self.assertEqual(monitor.main(), 0)
-        m.assert_called_once_with("fetch_watchlist_posts.py")
+        self.assertEqual([c.args[0] for c in m.call_args_list], ["fetch_watchlist_posts.py", "fetch_engagers.py"])
 
-    def test_failures_return_one(self):
-        for code in (2, -1, 1):
-            with mock.patch.object(monitor, "run", return_value=(code, "NEW_POSTS=3")):
+    def test_auth_failure_stops_pipeline(self):
+        with mock.patch.object(monitor, "run", return_value=(2, "NEW_POSTS=0")) as m:
+            self.assertEqual(monitor.main(), 1)
+        self.assertEqual(m.call_count, 1)
+
+    def test_other_failures_return_one_after_running_everything(self):
+        for code in (-1, 1):
+            with mock.patch.object(monitor, "run", return_value=(code, "NEW_POSTS=3")) as m:
                 self.assertEqual(monitor.main(), 1, code)
+            self.assertEqual(m.call_count, 2)
+
+    def test_engager_failure_reported(self):
+        seq = iter([(0, "NEW_POSTS=1"), (1, "boom")])
+        with mock.patch.object(monitor, "run", side_effect=lambda *a: next(seq)):
+            self.assertEqual(monitor.main(), 1)
 
 
 if __name__ == "__main__":
