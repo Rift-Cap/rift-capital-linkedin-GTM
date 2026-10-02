@@ -7,6 +7,7 @@ from .util import http
 
 API = "https://api.lemlist.com/api"
 ALREADY = ("already", "duplicate", "exists")
+NOT_PERSON = "not a personal profile"
 
 
 class LemlistError(Exception):
@@ -58,10 +59,12 @@ class Lemlist:
         return (cid, False) if cid else (self.create_campaign(name), True)
 
     def add_lead(self, campaign_id: str, lead: dict) -> str:
-        """Returns 'added' or 'exists'; raises LemlistError otherwise."""
+        """Returns 'added', 'exists' or 'skipped' (LinkedIn URL is a company / not a person); raises LemlistError otherwise."""
         r = self._req("POST", f"/campaigns/{campaign_id}/leads/", json=lead)
         if r.status_code in (200, 201):
             return "added"
+        if r.status_code == 400 and NOT_PERSON in r.text.lower():
+            return "skipped"
         if r.status_code in (400, 409) and any(w in r.text.lower() for w in ALREADY):
             return "exists"
         raise LemlistError(f"lemlist add lead HTTP {r.status_code}: {r.text[:200]}")
