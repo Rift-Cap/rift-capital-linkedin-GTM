@@ -28,6 +28,8 @@ DELAY_MAX_S = float(env("DELAY_MAX_S", "8"))
 ENGAGER_WINDOW_DAYS = int(env("ENGAGER_WINDOW_DAYS", "7"))
 MAX_REACTIONS_PER_POST = int(env("MAX_REACTIONS_PER_POST", "100"))
 MAX_COMMENTS_PER_POST = int(env("MAX_COMMENTS_PER_POST", "100"))
+# Stop cleanly before monitor.py's 900 s subprocess timeout; unfinished posts resume on the next run.
+ENGAGER_TIME_BUDGET_S = int(env("ENGAGER_TIME_BUDGET_S", "780"))
 
 # ---- Orchestrator ----------------------------------------------------------
 SUBPROCESS_TIMEOUT_S = 900
