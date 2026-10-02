@@ -42,7 +42,8 @@ Notion Watchlist (accounts to follow)
   and the run continues; a 401/403 aborts the run with exit 2. Prints `NEW_POSTS=<n>` and exits 0 after any normal run.
 - `03-workflows/fetch_engagers.py` visits posts younger than `ENGAGER_WINDOW_DAYS` and stores up to `MAX_REACTIONS_PER_POST` reactions and
   `MAX_COMMENTS_PER_POST` top-level comments each (replies to comments are not collected). Same exit-code rules as above; prints `NEW_ENGAGERS=<n>`.
-  If `NOTION_ENGAGERS_DB` is not set it logs a warning and skips.
+  If `NOTION_ENGAGERS_DB` is not set it logs a warning and skips. It stops cleanly after `ENGAGER_TIME_BUDGET_S` (780 s) and
+  visits the least-covered posts first, so the first big catch-up simply continues over the next runs (status `partial` in the Run Log).
 - `03-workflows/add_to_watchlist.py <file>` bulk-adds accounts.
 - `monitor.py` runs the two fetch scripts one after the other, each with a 900 s timeout and returns 1 on auth failure, timeout or non-zero exit.
 
@@ -52,7 +53,7 @@ Share / activity / ugcPost URLs are never converted into one another.
 ## Settings (optional env vars)
 
 `MAX_POSTS_PER_ACCOUNT` (50), `REFRESH_WINDOW_DAYS` (7), `DELAY_MIN_S` / `DELAY_MAX_S` (3 / 8 seconds between accounts or posts),
-`ENGAGER_WINDOW_DAYS` (7), `MAX_REACTIONS_PER_POST` (100), `MAX_COMMENTS_PER_POST` (100).
+`ENGAGER_WINDOW_DAYS` (7), `MAX_REACTIONS_PER_POST` (100), `MAX_COMMENTS_PER_POST` (100), `ENGAGER_TIME_BUDGET_S` (780).
 
 ## Notes
 
