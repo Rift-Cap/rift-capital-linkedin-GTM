@@ -24,5 +24,10 @@ REFRESH_WINDOW_DAYS = int(env("REFRESH_WINDOW_DAYS", "7"))
 DELAY_MIN_S = float(env("DELAY_MIN_S", "3"))
 DELAY_MAX_S = float(env("DELAY_MAX_S", "8"))
 
+# ---- Engagers (who reacted / commented) ------------------------------------
+ENGAGER_WINDOW_DAYS = int(env("ENGAGER_WINDOW_DAYS", "7"))
+MAX_REACTIONS_PER_POST = int(env("MAX_REACTIONS_PER_POST", "100"))
+MAX_COMMENTS_PER_POST = int(env("MAX_COMMENTS_PER_POST", "100"))
+
 # ---- Orchestrator ----------------------------------------------------------
 SUBPROCESS_TIMEOUT_S = 900

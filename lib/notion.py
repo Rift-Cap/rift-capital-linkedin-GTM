@@ -1,6 +1,6 @@
 """Minimal Notion REST client (API version 2022-06-28) used as the system's database.
 
-Three databases: watchlist (accounts to follow), posts, runs (run log).
+Four databases: watchlist (accounts to follow), posts, engagers (who reacted/commented), runs (run log).
 State lives in Notion so the job can run on ephemeral machines (cron, GitHub Actions).
 """
 import time
@@ -64,7 +64,7 @@ class Notion:
         }
         self.dbs = {
             "watchlist": env("NOTION_WATCHLIST_DB"), "posts": env("NOTION_POSTS_DB"),
-            "runs": env("NOTION_RUNS_DB"),
+            "engagers": env("NOTION_ENGAGERS_DB"), "runs": env("NOTION_RUNS_DB"),
         }
 
     def _req(self, method: str, path: str, json: dict | None = None) -> dict:

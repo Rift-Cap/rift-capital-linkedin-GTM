@@ -24,6 +24,34 @@ def _count(item: dict, key: str):
     return v if isinstance(v, int) else None
 
 
+def _profile_url(a: dict) -> str:
+    for k in ("public_profile_url", "profile_url", "url"):
+        if a.get(k):
+            return canonical_url(a[k])
+    if a.get("public_identifier"):
+        return f"https://www.linkedin.com/in/{a['public_identifier']}"
+    return ""
+
+
+def parse_reaction(item: dict) -> dict | None:
+    """Unipile reaction item -> flat dict (parsed defensively: missing fields become '')."""
+    a = item.get("author") if isinstance(item.get("author"), dict) else {}
+    name = a.get("name") or ""
+    if not name:
+        return None
+    return {"name": name, "headline": a.get("headline") or "", "profile_url": _profile_url(a),
+            "source": "Reaction", "reaction_type": item.get("value") or "", "comment_text": ""}
+
+
+def parse_comment(item: dict) -> dict | None:
+    a = item.get("author_details") or (item.get("author") if isinstance(item.get("author"), dict) else {}) or {}
+    name = a.get("name") or (item.get("author") if isinstance(item.get("author"), str) else "") or ""
+    if not name:
+        return None
+    return {"name": name, "headline": a.get("headline") or "", "profile_url": _profile_url(a),
+            "source": "Comment", "reaction_type": "", "comment_text": " ".join((item.get("text") or "").split())}
+
+
 def parse_post(item: dict) -> dict | None:
     """Unipile post item -> flat dict. The permalink is preserved exactly (only the
     query string / trailing slash are stripped); share / activity / ugcPost URLs are
@@ -84,6 +112,14 @@ class Unipile:
         sources = data.get("sources") or []
         if sources and not any((s.get("status") or "").upper() == "OK" for s in sources):
             raise AuthError(401, f"LinkedIn account not healthy: {[s.get('status') for s in sources]}")
+
+    def list_reactions(self, social_id: str, limit: int) -> list[dict]:
+        items = self._paginate(f"/posts/{quote(social_id, safe=':')}/reactions", limit=limit)
+        return [e for it in items if (e := parse_reaction(it))]
+
+    def list_comments(self, social_id: str, limit: int) -> list[dict]:
+        items = self._paginate(f"/posts/{quote(social_id, safe=':')}/comments", limit=limit)
+        return [e for it in items if (e := parse_comment(it))]
 
     def resolve_person(self, slug: str) -> dict:
         """GET /users/{slug} -> {'provider_id', 'name'}."""
