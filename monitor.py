@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lightweight orchestrator. Run daily from cron / launchd / GitHub Actions.
 
-Runs fetch_watchlist_posts.py, then fetch_engagers.py, each as a subprocess with a 900s timeout; only the
+Runs fetch_watchlist_posts.py, then fetch_engagers.py, then push_to_lemlist.py, each as a subprocess with a 900s timeout; only the
 last lines of output are logged. NEW_POSTS / NEW_ENGAGERS are parsed BEFORE judging the exit code.
 Returns 1 on auth failure (exit code 2), timeout or any non-zero exit.
 """
@@ -41,7 +41,8 @@ def parse_int(tag: str, out: str) -> int:
 
 def main() -> int:
     failed = False
-    for script, tag in (("fetch_watchlist_posts.py", "NEW_POSTS"), ("fetch_engagers.py", "NEW_ENGAGERS")):
+    for script, tag in (("fetch_watchlist_posts.py", "NEW_POSTS"), ("fetch_engagers.py", "NEW_ENGAGERS"),
+                        ("push_to_lemlist.py", "PUSHED")):
         code, out = run(script)
         log.info("%s=%s", tag, parse_int(tag, out))  # read first; exit code is judged after
         if code == AUTH_FAILED:

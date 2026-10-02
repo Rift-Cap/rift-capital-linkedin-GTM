@@ -48,8 +48,12 @@ Notion Watchlist (accounts to follow)
   already there (match on LinkedIn `/in/` slug; otherwise on full name, only against Attio people that have no LinkedIn URL).
   Skipped people are counted in the Run Log summary. If Attio is unreachable the run continues without de-dup and logs `partial`.
   Rows already in Notion are not touched.
+- `03-workflows/push_to_lemlist.py` (only when `LEMLIST_API_KEY` **and** `ATTIO_API_KEY` are set) finds or creates the lemlist campaign
+  `LEMLIST_CAMPAIGN_NAME` and adds every engager that is not in Attio as a lead (once per person). It creates no sequence and
+  launches nothing. Each Notion Engagers row gets a `Lemlist` value (Pushed / In Attio / No URL); empty = still to do.
+  Prints `PUSHED=<n>`. Needs a `Lemlist` select property on the Engagers database (`setup_notion.py` creates it).
 - `03-workflows/add_to_watchlist.py <file>` bulk-adds accounts.
-- `monitor.py` runs the two fetch scripts one after the other, each with a 900 s timeout and returns 1 on auth failure, timeout or non-zero exit.
+- `monitor.py` runs the two fetch scripts and then the lemlist push one after the other, each with a 900 s timeout and returns 1 on auth failure, timeout or non-zero exit.
 
 Post URLs are stored exactly as Unipile returns them (`share_url`), with only the query string and trailing slash stripped.
 Share / activity / ugcPost URLs are never converted into one another.
