@@ -2,7 +2,7 @@
 """Put engagers that are NOT in Attio into a lemlist campaign (found by name, created on first use).
 
 Only the campaign and its leads are created: no sequence, nothing is launched or sent.
-Each Notion Engagers row gets a `Lemlist` value: Pushed / In Attio / No URL (rows left empty are retried next run).
+Each Notion Engagers row gets a `Lemlist` value: Pushed / In Attio / No URL / Company (rows left empty are retried next run).
 A person who engaged several times is pushed once. Needs LEMLIST_API_KEY and ATTIO_API_KEY (without Attio the
 step refuses to run, so known contacts are never pushed). Prints PUSHED=<n>.
 Exit codes: 0 = normal run (also when skipped), 1 = errors / lemlist or Attio failure.
@@ -29,6 +29,10 @@ def split_name(full: str) -> tuple[str, str]:
     return (parts[0], " ".join(parts[1:])) if parts else ("", "")
 
 
+def is_company_url(url: str) -> bool:
+    return any(f"/{x}/" in (url or "").lower() + "/" for x in ("company", "school", "showcase"))
+
+
 def person_key(row_url: str, name: str) -> str:
     return A.linkedin_slug(row_url) or (row_url or "").strip().lower()
 
@@ -46,11 +50,14 @@ def run(notion, lemlist, attio, campaign_name=None, clock=time.monotonic, budget
         if not key:
             notion.update(row["id"], {"Lemlist": N.select("No URL")})
             continue
+        if is_company_url(url):  # a company page reacted / commented: not a lead
+            notion.update(row["id"], {"Lemlist": N.select("Company")})
+            continue
         p = people.setdefault(key, {"url": url, "name": name, "headline": N.read(row, "Headline"), "rows": []})
         p["rows"].append(row["id"])
     log.info("%d engager rows, %d people to check", len(rows), len(people))
 
-    campaign_id, errors, pushed, in_attio, out_of_time = "", [], 0, 0, False
+    campaign_id, errors, pushed, in_attio, companies, out_of_time = "", [], 0, 0, 0, False
     for p in people.values():
         if clock() >= deadline:
             out_of_time = True
@@ -65,8 +72,13 @@ def run(notion, lemlist, attio, campaign_name=None, clock=time.monotonic, budget
                 campaign_id, created = lemlist.get_or_create_campaign(campaign_name or LEMLIST_CAMPAIGN_NAME)
                 log.info("lemlist campaign %s (%s)", campaign_id, "created" if created else "existing")
             first, last = split_name(p["name"])
-            lemlist.add_lead(campaign_id, {"linkedinUrl": p["url"], "firstName": first, "lastName": last,
+            result = lemlist.add_lead(campaign_id, {"linkedinUrl": p["url"], "firstName": first, "lastName": last,
                                            "jobTitle": p["headline"][:200]})
+            if result == "skipped":  # lemlist says the URL is not a personal profile
+                for rid in p["rows"]:
+                    notion.update(rid, {"Lemlist": N.select("Company")})
+                companies += 1
+                continue
         except LemlistError as e:
             log.warning("%s: %s", p["name"], e)
             errors.append(f"{p['name']}: {e}")
@@ -78,7 +90,7 @@ def run(notion, lemlist, attio, campaign_name=None, clock=time.monotonic, budget
         pushed += 1
 
     status = "partial" if errors or out_of_time else "ok"
-    summary = f"{pushed} pushed to lemlist campaign '{campaign_name or LEMLIST_CAMPAIGN_NAME}', {in_attio} already in Attio, {len(errors)} errors"
+    summary = f"{pushed} pushed to lemlist campaign '{campaign_name or LEMLIST_CAMPAIGN_NAME}', {in_attio} already in Attio, {companies} company pages skipped, {len(errors)} errors"
     if out_of_time:
         summary += ", time budget reached (resuming next run)"
     if errors:
