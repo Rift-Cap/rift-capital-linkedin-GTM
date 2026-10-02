@@ -31,5 +31,8 @@ MAX_COMMENTS_PER_POST = int(env("MAX_COMMENTS_PER_POST", "100"))
 # Stop cleanly before monitor.py's 900 s subprocess timeout; unfinished posts resume on the next run.
 ENGAGER_TIME_BUDGET_S = int(env("ENGAGER_TIME_BUDGET_S", "780"))
 
+# ---- lemlist -----------------------------------------------------------------
+LEMLIST_CAMPAIGN_NAME = env("LEMLIST_CAMPAIGN_NAME", "LinkedIn engagers (watchlist)")
+
 # ---- Orchestrator ----------------------------------------------------------
 SUBPROCESS_TIMEOUT_S = 900
