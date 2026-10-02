@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Lightweight orchestrator. Run daily from cron / launchd / GitHub Actions.
 
-Runs fetch_watchlist_posts.py as a subprocess with a 900s timeout; only the last lines of
-output are logged. NEW_POSTS is parsed BEFORE judging the exit code.
+Runs fetch_watchlist_posts.py, then fetch_engagers.py, each as a subprocess with a 900s timeout; only the
+last lines of output are logged. NEW_POSTS / NEW_ENGAGERS are parsed BEFORE judging the exit code.
 Returns 1 on auth failure (exit code 2), timeout or any non-zero exit.
 """
 import re
@@ -40,18 +40,17 @@ def parse_int(tag: str, out: str) -> int:
 
 
 def main() -> int:
-    code, out = run("fetch_watchlist_posts.py")
-    new_posts = parse_int("NEW_POSTS", out)  # read first; exit code is judged after
-    log.info("NEW_POSTS=%s", new_posts)
-    if code == AUTH_FAILED:
-        log.error("LinkedIn auth failed")
-        return 1
-    if code == TIMED_OUT:
-        return 1
-    if code != 0:
-        log.error("fetch_watchlist_posts.py failed (exit %s)", code)
-        return 1
-    return 0
+    failed = False
+    for script, tag in (("fetch_watchlist_posts.py", "NEW_POSTS"), ("fetch_engagers.py", "NEW_ENGAGERS")):
+        code, out = run(script)
+        log.info("%s=%s", tag, parse_int(tag, out))  # read first; exit code is judged after
+        if code == AUTH_FAILED:
+            log.error("LinkedIn auth failed")
+            return 1
+        if code != 0:  # includes timeouts (-1)
+            log.error("%s failed (exit %s)", script, code)
+            failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

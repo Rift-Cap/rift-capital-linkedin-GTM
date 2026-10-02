@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-off: create the three Notion databases (watchlist, posts, run log) under a parent page.
+"""One-off: create the four Notion databases (watchlist, posts, engagers, run log) under a parent page.
 
 1. Create an internal integration at notion.so/profile/integrations, copy its token into .env (NOTION_TOKEN).
 2. Share a parent page with that integration (page ... > Connections).
@@ -24,6 +24,9 @@ SCHEMAS = {
         "Title": T, "Post URL": U, "Social ID": RT, "Account": RT, "Account URL": U, "Posted At": D,
         "Posted (raw)": RT, "Text": RT, "Reactions": NUM, "Comments": NUM, "Reposts": NUM,
         "Is Repost": S("Yes", "No"), "Collected At": D, "Counters Updated": D}),
+    "NOTION_ENGAGERS_DB": ("LinkedIn Engagers", {
+        "Name": T, "Profile URL": U, "Headline": RT, "Post URL": U, "Account": RT,
+        "Source": S("Reaction", "Comment"), "Reaction Type": RT, "Comment Text": RT, "Key": RT, "Collected At": D}),
     "NOTION_RUNS_DB": ("Run Log", {"Run": T, "Script": S(), "Status": S(), "Summary": RT, "At": D}),
 }
 

@@ -1,12 +1,13 @@
 # linkedin-monitor (Unipile + Notion)
 
-Follows a watchlist of LinkedIn accounts (people and companies) and stores all their posts in Notion.
+Follows a watchlist of LinkedIn accounts (people and companies), stores all their posts in Notion, and records who reacted / commented on the recent ones.
 No scoring, no LLM, no outreach tool. Notion is the database, so it runs fine on cron or GitHub Actions.
 
 ```
 Notion Watchlist (accounts to follow)
   ─► Unipile: resolve provider id once, list each account's posts
   ─► Notion Posts (new posts created; counters of posts < 7 days old refreshed)
+  ─► Unipile: reactions + comments of posts < 7 days old ─► Notion Engagers (de-duplicated)
   ─► Notion Run Log + 05-actions-log/results.md
 ```
 
@@ -14,14 +15,14 @@ Notion Watchlist (accounts to follow)
 
 1. `pip install -r requirements.txt`; `cp .env.example .env` and fill it in.
 2. Notion: create an integration, share a parent page with it, then `python setup_notion.py <parent_page_id>`
-   and paste the three printed lines (`NOTION_WATCHLIST_DB`, `NOTION_POSTS_DB`, `NOTION_RUNS_DB`) into `.env`.
+   and paste the four printed lines (`NOTION_WATCHLIST_DB`, `NOTION_POSTS_DB`, `NOTION_ENGAGERS_DB`, `NOTION_RUNS_DB`) into `.env`.
 3. Fill the watchlist: add rows in Notion (LinkedIn URL + Status `Active`), or bulk-add from a text file:
    `python 03-workflows/add_to_watchlist.py accounts.txt` (one URL per line, optional `, label`; `#` comments allowed;
    duplicates and URLs that are not `/in/` or `/company/` are skipped).
 4. Try it: `python monitor.py`.
 5. Schedule daily: `0 6 * * * cd /path/linkedin-monitor && python3 monitor.py` (cron/launchd) or use
    `.github/workflows/monitor.yml` (secrets: `UNIPILE_DSN`, `UNIPILE_API_KEY`, `UNIPILE_ACCOUNT_ID`, `NOTION_TOKEN`,
-   `NOTION_WATCHLIST_DB`, `NOTION_POSTS_DB`, `NOTION_RUNS_DB`).
+   `NOTION_WATCHLIST_DB`, `NOTION_POSTS_DB`, `NOTION_ENGAGERS_DB`, `NOTION_RUNS_DB`).
 
 ## Notion databases
 
@@ -29,6 +30,8 @@ Notion Watchlist (accounts to follow)
   Only Name/URL/Status need filling in; Provider ID, Type and Name are resolved on the first run. Set Status=Paused to skip an account.
 - **Posts**: Title, Post URL, Social ID, Account, Account URL, Posted At, Posted (raw), Text, Reactions, Comments, Reposts,
   Is Repost, Collected At, Counters Updated.
+- **Engagers**: Name, Profile URL, Headline, Post URL, Account, Source (Reaction/Comment), Reaction Type, Comment Text, Key, Collected At.
+  One row per person per post (a person who both reacts and comments gets two rows); `Key` is the de-dup hash, don't edit it.
 - **Run Log**: Run, Script, Status, Summary, At.
 
 ## Scripts
@@ -37,15 +40,19 @@ Notion Watchlist (accounts to follow)
   non-paused account lists up to `MAX_POSTS_PER_ACCOUNT` posts. Unseen posts are created; already-seen posts younger than
   `REFRESH_WINDOW_DAYS` only get their counters refreshed; older ones are left alone. A failing account sets its `Last Error`
   and the run continues; a 401/403 aborts the run with exit 2. Prints `NEW_POSTS=<n>` and exits 0 after any normal run.
+- `03-workflows/fetch_engagers.py` visits posts younger than `ENGAGER_WINDOW_DAYS` and stores up to `MAX_REACTIONS_PER_POST` reactions and
+  `MAX_COMMENTS_PER_POST` top-level comments each (replies to comments are not collected). Same exit-code rules as above; prints `NEW_ENGAGERS=<n>`.
+  If `NOTION_ENGAGERS_DB` is not set it logs a warning and skips.
 - `03-workflows/add_to_watchlist.py <file>` bulk-adds accounts.
-- `monitor.py` runs the fetch script with a 900 s timeout and returns 1 on auth failure, timeout or non-zero exit.
+- `monitor.py` runs the two fetch scripts one after the other, each with a 900 s timeout and returns 1 on auth failure, timeout or non-zero exit.
 
 Post URLs are stored exactly as Unipile returns them (`share_url`), with only the query string and trailing slash stripped.
 Share / activity / ugcPost URLs are never converted into one another.
 
 ## Settings (optional env vars)
 
-`MAX_POSTS_PER_ACCOUNT` (50), `REFRESH_WINDOW_DAYS` (7), `DELAY_MIN_S` / `DELAY_MAX_S` (3 / 8 seconds between accounts).
+`MAX_POSTS_PER_ACCOUNT` (50), `REFRESH_WINDOW_DAYS` (7), `DELAY_MIN_S` / `DELAY_MAX_S` (3 / 8 seconds between accounts or posts),
+`ENGAGER_WINDOW_DAYS` (7), `MAX_REACTIONS_PER_POST` (100), `MAX_COMMENTS_PER_POST` (100).
 
 ## Notes
 
