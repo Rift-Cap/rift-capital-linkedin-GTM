@@ -21,9 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import requests  # noqa: E402
 
+from lib import attio as A  # noqa: E402
 from lib import notion as N  # noqa: E402
 from lib.config import (DELAY_MAX_S, DELAY_MIN_S, ENGAGER_TIME_BUDGET_S, ENGAGER_WINDOW_DAYS,  # noqa: E402
                         LOG_DIR, MAX_COMMENTS_PER_POST, MAX_REACTIONS_PER_POST)
+from lib.config import env  # noqa: E402
 from lib.notion import Notion  # noqa: E402
 from lib.unipile import AuthError, Unipile, UnipileError  # noqa: E402
 from lib.util import canonical_url, get_logger, now_iso, now_utc, parse_dt  # noqa: E402
@@ -76,8 +78,9 @@ def write_results_md(counts: dict[str, int], errors: list[str], status: str) -> 
         f.write("".join(lines))
 
 
-def run(uni, notion, sleep=time.sleep, now=None, clock=time.monotonic, budget_s=None) -> tuple[int, int]:
-    """Returns (exit_code, new_engager_count)."""
+def run(uni, notion, sleep=time.sleep, now=None, clock=time.monotonic, budget_s=None,
+        attio=None) -> tuple[int, int]:
+    """Returns (exit_code, new_engager_count). `attio` (A.AttioIndex) = people already in the CRM, skipped."""
     try:
         uni.check_auth()
     except AuthError as e:
@@ -98,7 +101,7 @@ def run(uni, notion, sleep=time.sleep, now=None, clock=time.monotonic, budget_s=
 
     counts: dict[str, int] = {}
     errors: list[str] = []
-    code, out_of_time = 0, False
+    code, out_of_time, in_attio = 0, False, 0
     stamp = now_iso()
     for i, post in enumerate(posts):
         if clock() >= deadline:
@@ -123,6 +126,9 @@ def run(uni, notion, sleep=time.sleep, now=None, clock=time.monotonic, budget_s=
             if clock() >= deadline:  # a post is picked up again next run; the de-dup keys skip what is stored
                 out_of_time = True
                 break
+            if attio is not None and attio.contains(e["name"], e["profile_url"]):
+                in_attio += 1
+                continue
             key = engager_key(post["url"], e)
             if key in seen:
                 continue
@@ -137,6 +143,8 @@ def run(uni, notion, sleep=time.sleep, now=None, clock=time.monotonic, budget_s=
     left = len(posts) - len(counts)
     status = "auth_failed" if code == AUTH_FAILED else ("partial" if errors or out_of_time else "ok")
     summary = f"{len(counts)}/{len(posts)} posts ok, {new_count} new engagers, {len(errors)} errors"
+    if attio is not None:
+        summary += f", {in_attio} already in Attio (skipped)"
     if out_of_time:
         summary += f", time budget reached ({left} posts left or unfinished, resuming next run)"
     if errors:
@@ -153,7 +161,19 @@ def main() -> int:
         log.warning("NOTION_ENGAGERS_DB is not set: skipping engagers collection")
         print("NEW_ENGAGERS=0")
         return 0
-    code, new_count = run(Unipile(), notion)
+    attio, attio_error = None, ""
+    if env("ATTIO_API_KEY"):
+        try:
+            attio = A.load_index()
+            log.info("Attio: %d known people (%d LinkedIn slugs)", len(attio), len(attio.slugs))
+        except A.AttioError as e:  # keep collecting; duplicates can be filtered later
+            attio_error = str(e)
+            log.warning("Attio de-dup disabled for this run: %s", e)
+    else:
+        log.info("ATTIO_API_KEY not set: no Attio de-duplication")
+    code, new_count = run(Unipile(), notion, attio=attio)
+    if attio_error:
+        notion.log_run(SCRIPT, "partial", f"Attio de-dup disabled: {attio_error}")
     print(f"NEW_ENGAGERS={new_count}")
     return code  # 0 after a normal run
 
