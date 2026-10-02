@@ -500,8 +500,8 @@ class AttioDedupTests(unittest.TestCase):
 
 
 class FakeLemlist:
-    def __init__(self, fail_for=()):
-        self.leads, self.campaigns, self.fail_for = [], [], set(fail_for)
+    def __init__(self, fail_for=(), company_for=()):
+        self.leads, self.campaigns, self.fail_for, self.company_for = [], [], set(fail_for), set(company_for)
 
     def get_or_create_campaign(self, name):
         self.campaigns.append(name)
@@ -510,6 +510,8 @@ class FakeLemlist:
     def add_lead(self, cid, lead):
         if lead["lastName"] in self.fail_for:
             raise LemlistError("boom")
+        if lead["lastName"] in self.company_for:
+            return "skipped"
         self.leads.append((cid, lead))
         return "added"
 
@@ -554,6 +556,15 @@ class LemlistPushTests(unittest.TestCase):
         self.assertEqual((code, n), (1, 1))
         self.assertEqual([N.read(r, "Lemlist") for r in nt.pages["engagers"]], ["", "Pushed"])
 
+    def test_company_pages_are_skipped_not_errors(self):
+        rows = [self.eng_row("Acme Inc", "https://www.linkedin.com/company/acme"),
+                self.eng_row("Odd Page", "https://www.linkedin.com/in/odd"),
+                self.eng_row("Bob Stone", "https://www.linkedin.com/in/bob")]
+        nt, lem, code, n = self.go(rows, lem=FakeLemlist(company_for=["Page"]))
+        self.assertEqual((code, n), (0, 1))           # exit 0: nothing to retry
+        self.assertEqual([N.read(r, "Lemlist") for r in nt.pages["engagers"]], ["Company", "Company", "Pushed"])
+        self.assertIn("1 company pages skipped", nt.log_calls[-1][2])
+
     def test_time_budget_stops_cleanly(self):
         rows = [self.eng_row("Ann Lee", "https://www.linkedin.com/in/ann")]
         nt = FakeNotion(engagers=rows)
@@ -578,6 +589,8 @@ class LemlistPushTests(unittest.TestCase):
             self.assertEqual(lem.add_lead("c", {}), "added")
         with mock.patch("lib.lemlist.http", return_value=R(400, "Lead already in campaign")):
             self.assertEqual(lem.add_lead("c", {}), "exists")
+        with mock.patch("lib.lemlist.http", return_value=R(400, "LinkedIn URL is not a personal profile")):
+            self.assertEqual(lem.add_lead("c", {}), "skipped")
         with mock.patch("lib.lemlist.http", return_value=R(500, "x")):
             with self.assertRaises(LemlistError):
                 lem.add_lead("c", {})
