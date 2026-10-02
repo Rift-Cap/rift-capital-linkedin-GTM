@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import monitor
+from lib import attio as A
 from lib import notion as N
 from lib.unipile import AuthError, UnipileError, parse_comment, parse_post, parse_reaction
 from lib.util import canonical_url, parse_account_url
@@ -445,6 +446,55 @@ class EngagerTests(unittest.TestCase):
             self.assertEqual(eng.main(), 0)
         pr.assert_called_with("NEW_ENGAGERS=0")
         u.assert_not_called()
+
+
+class AttioDedupTests(unittest.TestCase):
+    RECORDS = [
+        {"values": {"name": [{"full_name": "Ann Lee"}], "linkedin": [{"value": "https://www.linkedin.com/in/ann-lee-1/"}]}},
+        {"values": {"name": [{"full_name": "José Martín"}]}},                       # no LinkedIn -> name match allowed
+        {"values": {"name": [{"full_name": "Bob Stone"}], "linkedin": [{"value": "https://fr.linkedin.com/in/bob-s"}]}},
+        {"values": {"name": [{"full_name": "Madonna"}]}},                           # single word never matches
+    ]
+
+    def test_slug_and_name_keys(self):
+        self.assertEqual(A.linkedin_slug("https://www.linkedin.com/in/Ann-Lee-1/?x=1"), "ann-lee-1")
+        self.assertEqual(A.linkedin_slug("https://www.linkedin.com/company/acme"), "")
+        self.assertEqual(A.name_key("Jose  MARTIN"), A.name_key("Martín, José"))
+        self.assertEqual(A.name_key("Madonna"), "")
+
+    def test_index_matching(self):
+        ix = A.build_index(self.RECORDS)
+        self.assertTrue(ix.contains("Whoever", "https://www.linkedin.com/in/ann-lee-1"))   # URL match
+        self.assertTrue(ix.contains("Jose Martin", ""))                                     # name match, Attio has no URL
+        self.assertFalse(ix.contains("Bob Stone", "https://www.linkedin.com/in/other-bob"))  # has other URL -> different person
+        self.assertFalse(ix.contains("Madonna", ""))
+
+    def test_run_skips_people_in_attio(self):
+        nt = FakeNotion(posts=[EngagerTests.post(1)])
+        uni = FakeUnipile(reactions={"urn:li:activity:1": [
+            EngagerTests.react("Ann Lee", pid="ann-lee-1"), EngagerTests.react("New Person", pid="new-person")]},
+            comments={"urn:li:activity:1": [EngagerTests.comment("Jose Martin", "hi", "ACo7")]})
+        with mock.patch.object(eng, "write_results_md"):
+            code, n = eng.run(uni, nt, sleep=lambda s: None, now=NOW, attio=A.build_index(self.RECORDS))
+        self.assertEqual((code, n), (0, 1))
+        self.assertEqual([N.read(r, "Name") for r in nt.pages["engagers"]], ["New Person"])
+        self.assertIn("2 already in Attio", nt.log_calls[-1][2])
+
+    def test_load_index_paginates_and_reports_errors(self):
+        class R:
+            def __init__(self, code, data): self.status_code, self._d, self.text = code, data, ""
+            def json(self): return {"data": self._d}
+        page = [{"values": {"linkedin": [{"value": f"https://www.linkedin.com/in/u{i}"}]}} for i in range(A.PAGE)]
+        with mock.patch.object(A, "http", side_effect=[R(200, page), R(200, [{"values": {"linkedin": [{"value": "https://www.linkedin.com/in/last"}]}}])]) as m:
+            ix = A.load_index("k")
+        self.assertEqual(m.call_count, 2)
+        self.assertIn("last", ix.slugs)
+        with mock.patch.object(A, "http", return_value=R(401, [])):
+            with self.assertRaises(A.AttioError):
+                A.load_index("k")
+        with self.assertRaises(A.AttioError):
+            with mock.patch.dict("os.environ", {}, clear=True):
+                A.load_index()
 
 
 class MonitorTests(unittest.TestCase):
