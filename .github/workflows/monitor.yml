@@ -16,8 +16,8 @@ jobs:
         env:
           UNIPILE_DSN: ${{ secrets.UNIPILE_DSN }}
           UNIPILE_API_KEY: ${{ secrets.UNIPILE_API_KEY }}
-          UNIPILE_ACCOUNT_ID: ${{ secrets.UNIPILE_ACCOUNT_ID }}
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          UNIPILE_ACCOUNT_ID: ${{ secrets.VL_LINKEDIN_ACCOUNT_ID }}
+          NOTION_TOKEN: ${{ secrets.NOTION_API_KEY }}
           NOTION_WATCHLIST_DB: ${{ secrets.NOTION_WATCHLIST_DB }}
           NOTION_POSTS_DB: ${{ secrets.NOTION_POSTS_DB }}
           NOTION_RUNS_DB: ${{ secrets.NOTION_RUNS_DB }}
